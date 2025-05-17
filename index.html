@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Dino Runner</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #f7f7f7;
+            font-family: 'Arial', sans-serif;
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #gameCanvas {
+            display: block;
+            background-color: #f7f7f7;
+            image-rendering: pixelated;
+        }
+        
+        #scoreContainer {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            font-size: min(5vw, 20px);
+            color: #0e0c0c;
+            text-align: right;
+            user-select: none;
+        }
+        
+        #currentScore {
+            font-weight: bold;
+        }
+        
+        #highScore {
+            margin-top: 5px;
+            font-size: min(4vw, 16px);
+            opacity: 0.8;
+        }
+        
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            font-weight: bold;
+            transform: translate(-50%, -50%);
+            font-size: min(8vw, 30px);
+            color: #e00000;
+            display: none;
+            text-align: center;
+            user-select: none;
+        }
+        
+        #restartPrompt {
+            margin-top: 15px;
+            font-size: min(5vw, 16px);
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
+        
+        .ground {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 2px;
+            background-color: #535353;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div class="ground"></div>
+        <div id="scoreContainer">
+            <div id="currentScore">0</div>
+            <div id="highScore">HI 0</div>
+        </div>
+        <div id="gameOver">
+            GAME OVER
+            <div id="restartPrompt">SPACE or TAP to PLAY AGAIN</div>
+        </div>
+    </div>
+
+    <script>
+        // Game variables
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const currentScoreElement = document.getElementById('currentScore');
+        const highScoreElement = document.getElementById('highScore');
+        const gameOverElement = document.getElementById('gameOver');
+        
+        // Audio context and sounds
+        let audioContext;
+        let jumpSound;
+        let crashSound;
+        let scoreSound;
+        let pointSound;
+        
+        function setupAudio() {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Jump sound (short high-pitched beep)
+                function createJumpSound() {
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    
+                    oscillator.type = 'square';
+                    oscillator.frequency.value = 520;
+                    gainNode.gain.value = 0.2;
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+                    
+                    oscillator.start();
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.15);
+                    oscillator.stop(audioContext.currentTime + 0.15);
+                }
+                
+                // Crash sound (more dramatic death sound)
+                function createCrashSound() {
+                    // Create two oscillators for richer sound
+                    const oscillator1 = audioContext.createOscillator();
+                    const oscillator2 = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    
+                    oscillator1.type = 'sawtooth';
+                    oscillator1.frequency.value = 120;
+                    
+                    oscillator2.type = 'square';
+                    oscillator2.frequency.value = 60;
+                    
+                    gainNode.gain.value = 0.5;
+                    
+                    oscillator1.connect(gainNode);
+                    oscillator2.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+                    
+                    // Make the sound more dramatic with frequency modulation
+                    oscillator1.frequency.exponentialRampToValueAtTime(60, audioContext.currentTime + 0.5);
+                    oscillator2.frequency.exponentialRampToValueAtTime(30, audioContext.currentTime + 0.5);
+                    
+                    oscillator1.start();
+                    oscillator2.start();
+                    
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.8);
+                    oscillator1.stop(audioContext.currentTime + 0.8);
+                    oscillator2.stop(audioContext.currentTime + 0.8);
+                }
+                
+                // Score sound (plays every 100 points)
+                function createScoreSound() {
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    
+                    oscillator.type = 'sine';
+                    oscillator.frequency.value = 700;
+                    gainNode.gain.value = 0.3;
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+                    
+                    oscillator.start();
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.1);
+                    oscillator.stop(audioContext.currentTime + 0.1);
+                }
+                
+                // Point sound (plays for each cactus passed)
+                function createPointSound() {
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    
+                    oscillator.type = 'sine';
+                    oscillator.frequency.value = 400;
+                    gainNode.gain.value = 0.2;
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+                    
+                    oscillator.start();
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.05);
+                    oscillator.stop(audioContext.currentTime + 0.05);
+                }
+                
+                jumpSound = createJumpSound;
+                crashSound = createCrashSound;
+                scoreSound = createScoreSound;
+                pointSound = createPointSound;
+                
+            } catch (e) {
+                console.log("Web Audio API not supported");
+                // Fallback: no sound
+                jumpSound = crashSound = scoreSound = pointSound = function() {};
+            }
+        }
+        
+        // Set canvas size to window size
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            // Adjust game parameters based on screen size
+            groundY = canvas.height * 0.85;
+            dino.y = groundY - dino.height;
+            dino.width = canvas.height * 0.1;
+            dino.height = canvas.height * 0.1;
+            dino.x = canvas.width * 0.1;
+        }
+        
+        // Game assets
+        const assets = {
+            dino: new Image(),
+            cactus: new Image(),
+            loaded: 0,
+            total: 2,
+            load: function(callback) {
+                this.dino.src = 'https://iili.io/3rkTxyl.png';
+                this.cactus.src = 'https://iili.io/3rkwpFs.png';
+                
+                this.dino.onload = this.cactus.onload = () => {
+                    this.loaded++;
+                    if (this.loaded === this.total) callback();
+                };
+            }
+        };
+        
+        // Game objects
+        const dino = {
+            x: 50,
+            y: 0,
+            width: 60,
+            height: 60,
+            velocityY: 0,
+            gravity: 1.2,  // Reduced gravity for better jumping
+            jumpForce: -20, // Slightly reduced jump force for better control
+            isJumping: false,
+            draw() {
+                ctx.drawImage(assets.dino, this.x, this.y, this.width, this.height);
+            },
+            jump() {
+                if (!this.isJumping) {
+                    this.velocityY = this.jumpForce;
+                    this.isJumping = true;
+                    jumpSound();
+                }
+            },
+            update() {
+                this.velocityY += this.gravity;
+                this.y += this.velocityY;
+                
+                if (this.y >= groundY - this.height) {
+                    this.y = groundY - this.height;
+                    this.velocityY = 0;
+                    this.isJumping = false;
+                }
+            }
+        };
+        
+        const cacti = [];
+        let groundY = 0;
+        let score = 0;
+        let highScore = localStorage.getItem('dinoHighScore') || 0;
+        let gameSpeed = 5;  // Slightly reduced initial speed
+        let gameOver = false;
+        let animationId;
+        let lastCactusTime = 0;
+        let cactusInterval = 2000;
+        let lastFrameTime = 0;
+        let scaleFactor = 1;
+        let lastScoreSoundTime = 0;
+        
+        // Initialize game
+        function init() {
+            resizeCanvas();
+            scaleFactor = canvas.height / 600;
+            highScoreElement.textContent = `HIGH SCORE ${highScore}`;
+            
+            // Reset game state
+            cacti.length = 0;
+            score = 0;
+            gameSpeed = 5;
+            gameOver = false;
+            dino.y = groundY - dino.height;
+            dino.isJumping = false;
+            dino.velocityY = 0;
+            lastCactusTime = 0;
+            lastScoreSoundTime = 0;
+            
+            currentScoreElement.textContent = '0';
+            gameOverElement.style.display = 'none';
+            
+            // Start game loop
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+            lastFrameTime = performance.now();
+            gameLoop();
+        }
+        
+        // Game loop
+        function gameLoop(timestamp) {
+            const deltaTime = timestamp - lastFrameTime;
+            lastFrameTime = timestamp;
+            
+            update(deltaTime);
+            draw();
+            
+            if (!gameOver) {
+                animationId = requestAnimationFrame(gameLoop);
+            }
+        }
+        
+        // Update game state
+        function update(deltaTime) {
+            // Update dino
+            dino.update();
+            
+            // Update cacti
+            const currentTime = performance.now();
+            if (currentTime - lastCactusTime > cactusInterval) {
+                addCactus();
+                lastCactusTime = currentTime;
+                
+                // Increase difficulty more gradually
+                cactusInterval = Math.max(800, 2000 - score * 8);
+                gameSpeed = 5 + score * 0.015;
+            }
+            
+            for (let i = cacti.length - 1; i >= 0; i--) {
+                cacti[i].x -= gameSpeed * (deltaTime / 16);
+                
+                // Check collision
+                if (
+                    dino.x < cacti[i].x + cacti[i].width &&
+                    dino.x + dino.width > cacti[i].x &&
+                    dino.y < cacti[i].y + cacti[i].height &&
+                    dino.y + dino.height > cacti[i].y
+                ) {
+                    endGame();
+                }
+                
+                // Remove off-screen cacti and increment score
+                if (cacti[i].x + cacti[i].width < 0) {
+                    cacti.splice(i, 1);
+                    score++;
+                    currentScoreElement.textContent = score;
+                    
+                    // Play point sound for each cactus passed
+                    pointSound();
+                    
+                    // Play score sound every 100 points
+                    if (score % 100 === 0) {
+                        const now = performance.now();
+                        if (now - lastScoreSoundTime > 100) {
+                            scoreSound();
+                            lastScoreSoundTime = now;
+                        }
+                    }
+                }
+            }
+        }
+        
+        function endGame() {
+            gameOver = true;
+            gameOverElement.style.display = 'block';
+            crashSound();
+            
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('dinoHighScore', highScore);
+                highScoreElement.textContent = `HI ${highScore}`;
+            }
+        }
+        
+        // Draw game
+        function draw() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw ground line
+            ctx.fillStyle = '#535353';
+            ctx.fillRect(0, groundY, canvas.width, 2 * scaleFactor);
+            
+            // Draw dino
+            dino.draw();
+            
+            // Draw cacti
+            for (const cactus of cacti) {
+                ctx.drawImage(assets.cactus, cactus.x, cactus.y, cactus.width, cactus.height);
+            }
+        }
+        
+        // Add a new cactus (now smaller)
+        function addCactus() {
+            // Smaller cactus sizes
+            const heightOptions = [30, 40, 50];  // Reduced from 50,70,90
+            const widthOptions = [20, 30, 40];   // Reduced from 30,45,60
+            
+            const height = heightOptions[Math.floor(Math.random() * heightOptions.length)] * scaleFactor;
+            const width = widthOptions[Math.floor(Math.random() * widthOptions.length)] * scaleFactor;
+            const y = groundY - height;
+            
+            cacti.push({
+                x: canvas.width,
+                y: y,
+                width: width,
+                height: height
+            });
+        }
+        
+        // Event listeners
+        window.addEventListener('resize', () => {
+            resizeCanvas();
+            if (gameOver) {
+                // Reposition game over text
+                gameOverElement.style.top = '50%';
+                gameOverElement.style.left = '50%';
+                gameOverElement.style.transform = 'translate(-50%, -50%)';
+            }
+        });
+        
+        function handleStart() {
+            if (gameOver) {
+                init();
+            } else {
+                dino.jump();
+            }
+        }
+        
+        // Keyboard controls
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.key === 'ArrowUp') {
+                handleStart();
+                e.preventDefault();
+            }
+        });
+        
+        // Touch controls
+        canvas.addEventListener('touchstart', (e) => {
+            handleStart();
+            e.preventDefault();
+        }, { passive: false });
+        
+        // Mouse controls
+        canvas.addEventListener('mousedown', (e) => {
+            handleStart();
+            e.preventDefault();
+        });
+        
+        // Load assets and start game
+        assets.load(() => {
+            setupAudio();
+            init();
+            
+            // Show click to start on mobile
+            if ('ontouchstart' in window) {
+                gameOverElement.style.display = 'block';
+                gameOverElement.innerHTML = 'TAP TO START';
+                gameOver = true;
+            }
+        });
+    </script>
+</body>
+</html>
